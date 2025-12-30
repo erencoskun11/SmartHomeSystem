@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Drawing;
 using System.IO.Ports;
-using System.Threading;
 using System.Windows.Forms;
 
 namespace SmartHomeSystem
@@ -12,10 +11,9 @@ namespace SmartHomeSystem
         CurtainControlSystemConnection curtain = new CurtainControlSystemConnection();
 
         bool isConnected = false;
-        bool userDraggingCurtain = false; // 🔴 KRİTİK FLAG
 
-        private System.Threading.Timer acTimer;
-        private System.Threading.Timer curtainTimer;
+        // Windows Forms Timer - UI thread'de çalışır, deadlock olmaz
+        private System.Windows.Forms.Timer updateTimer;
 
         public Form1()
         {
@@ -40,24 +38,42 @@ namespace SmartHomeSystem
 
             btnDisconnect.Enabled = false;
 
-            // 🔹 TrackBar eventleri
+            // TrackBar event - sadece değer gösterimi için
             trackCurtain.ValueChanged += trackCurtain_ValueChanged;
-            trackCurtain.MouseDown += (s, ev) => userDraggingCurtain = true;
-            trackCurtain.MouseUp += trackCurtain_MouseUp;
 
-            // Log callback (opsiyonel)
-            airCon.Log = s =>
+            // Windows Forms Timer oluştur
+            updateTimer = new System.Windows.Forms.Timer();
+            updateTimer.Interval = 1000; // 1 saniye
+            updateTimer.Tick += UpdateTimer_Tick;
+        }
+
+        // ================= TIMER TICK =================
+        private void UpdateTimer_Tick(object sender, EventArgs e)
+        {
+            if (!isConnected) return;
+
+            try
             {
-                if (!IsHandleCreated) return;
-                BeginInvoke(new Action(() =>
-                {
-                    var arr = Controls.Find("txtLog", true);
-                    if (arr.Length > 0 && arr[0] is TextBox tb)
-                        tb.AppendText(s + Environment.NewLine);
-                }));
-            };
+                // Curtain sistemi güncelle
+                curtain.update();
 
-            curtain.Log = airCon.Log;
+                lblLight.Text = $"Light: {curtain.getLightIntensity():0} Lux";
+                lblPressure.Text = $"Pressure: {curtain.getOutdoorPress():0} hPa";
+
+                int safeCurtain = (int)Math.Round(curtain.getCurtainStatus());
+                safeCurtain = Math.Max(0, Math.Min(100, safeCurtain));
+                lblCurtainStatus.Text = $"Curtain: %{safeCurtain}";
+
+                // AC sistemi güncelle
+                airCon.update();
+                lblAmbientTemp.Text = $"Ambient: {airCon.getAmbientTemp():0.0} °C";
+                lblFanSpeed.Text = $"Fan Speed: {airCon.getFanSpeed()} RPM";
+            }
+            catch (Exception ex)
+            {
+                // Hata durumunda sessizce devam et
+                System.Diagnostics.Debug.WriteLine("Update error: " + ex.Message);
+            }
         }
 
         // ================= CONNECT =================
@@ -95,8 +111,8 @@ namespace SmartHomeSystem
                 cboPorts.Enabled = false;
                 cboCurtainPorts.Enabled = false;
 
-                acTimer = new System.Threading.Timer(AcTimerCallback, null, 0, 700);
-                curtainTimer = new System.Threading.Timer(CurtainTimerCallback, null, 0, 900);
+                // Timer'ı başlat
+                updateTimer.Start();
             }
             catch (Exception ex)
             {
@@ -104,65 +120,10 @@ namespace SmartHomeSystem
             }
         }
 
-        // ================= AC TIMER =================
-        private void AcTimerCallback(object state)
-        {
-            try
-            {
-                airCon.update();
-                BeginInvoke(new Action(() =>
-                {
-                    lblAmbientTemp.Text = $"Ambient: {airCon.getAmbientTemp():0.0} °C";
-                    lblFanSpeed.Text = $"Fan Speed: {airCon.getFanSpeed()} RPM";
-                }));
-            }
-            catch { }
-        }
-
-        // ================= CURTAIN TIMER =================
-        private void CurtainTimerCallback(object state)
-        {
-            try
-            {
-                curtain.update();
-
-                BeginInvoke(new Action(() =>
-                {
-                    lblLight.Text = $"Light: {curtain.getLightIntensity():0} Lux";
-                    lblPressure.Text = $"Pressure: {curtain.getOutdoorPress():0} hPa";
-
-                    // ✅ TEK NOKTADA GÜVENLİ DEĞER
-                    int safeCurtain = (int)Math.Round(curtain.getCurtainStatus());
-                    safeCurtain = Math.Max(0, Math.Min(100, safeCurtain));
-
-                    lblCurtainStatus.Text = $"Curtain: %{safeCurtain}";
-
-                    // 🔴 Kullanıcı sürüklemiyorsa UI senkronla
-                    if (!userDraggingCurtain)
-                    {
-                        trackCurtain.Value = safeCurtain;
-                        lblCurtainValShow.Text = safeCurtain + " %";
-                    }
-                }));
-            }
-            catch { }
-        }
-
         // ================= TRACKBAR =================
         private void trackCurtain_ValueChanged(object sender, EventArgs e)
         {
             lblCurtainValShow.Text = trackCurtain.Value + " %";
-        }
-
-        private void trackCurtain_MouseUp(object sender, MouseEventArgs e)
-        {
-            userDraggingCurtain = false;
-
-            if (!isConnected) return;
-
-            bool ok = curtain.setCurtainStatus(trackCurtain.Value);
-            if (!ok)
-                MessageBox.Show("Perde komutu gönderilemedi.");
         }
 
         // ================= BUTTONS =================
@@ -175,13 +136,26 @@ namespace SmartHomeSystem
         private void btnSetCurtain_Click(object sender, EventArgs e)
         {
             if (!isConnected) return;
-            curtain.setCurtainStatus(trackCurtain.Value);
+            
+            // Timer'ı geçici olarak durdur (çakışma olmasın)
+            updateTimer.Stop();
+            
+            try
+            {
+                bool ok = curtain.setCurtainStatus(trackCurtain.Value);
+                if (!ok)
+                    MessageBox.Show("Perde komutu gönderilemedi.");
+            }
+            finally
+            {
+                // Timer'ı tekrar başlat
+                updateTimer.Start();
+            }
         }
 
         private void btnDisconnect_Click(object sender, EventArgs e)
         {
-            acTimer?.Dispose();
-            curtainTimer?.Dispose();
+            updateTimer?.Stop();
 
             airCon.close();
             curtain.close();
@@ -199,8 +173,8 @@ namespace SmartHomeSystem
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-            acTimer?.Dispose();
-            curtainTimer?.Dispose();
+            updateTimer?.Stop();
+            updateTimer?.Dispose();
             airCon.close();
             curtain.close();
         }
