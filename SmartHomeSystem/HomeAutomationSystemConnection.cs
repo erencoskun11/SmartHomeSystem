@@ -10,7 +10,6 @@ namespace SmartHomeSystem
         protected int comPort;
         protected int baudRate;
 
-        // Log callback (Form1 bu property'yi set edebilir)
         public Action<string> Log { get; set; } = s => { };
 
         public void setComPort(int port)
@@ -29,6 +28,12 @@ namespace SmartHomeSystem
             try
             {
                 serialPort.BaudRate = rate;
+                serialPort.Parity = Parity.None;
+                serialPort.DataBits = 8;
+                serialPort.StopBits = StopBits.One;
+                serialPort.Handshake = Handshake.None;
+                serialPort.ReadTimeout = 500;
+                serialPort.WriteTimeout = 500;
             }
             catch { }
         }
@@ -59,9 +64,8 @@ namespace SmartHomeSystem
                 if (serialPort.IsOpen)
                 {
                     serialPort.Close();
-                    return true;
                 }
-                return false;
+                return true;
             }
             catch (Exception ex)
             {
@@ -70,13 +74,12 @@ namespace SmartHomeSystem
             }
         }
 
-        // Alt sınıflar güncelleme mantığını override etsin (küçük harf)
         public virtual void update()
         {
-            // Default does nothing
+            
         }
 
-        // protected yardımcılar
+
         protected void SendByte(byte data)
         {
             try
@@ -96,12 +99,13 @@ namespace SmartHomeSystem
         {
             try
             {
-                if (!serialPort.IsOpen) return -1;
+                if (!serialPort.IsOpen)
+                    return -1;
 
-                int timeout = 50; // 50 * 10ms = 500ms
+                int timeout = 20; 
                 while (serialPort.BytesToRead == 0 && timeout > 0)
                 {
-                    Thread.Sleep(10);
+                    System.Threading.Thread.Sleep(10);
                     timeout--;
                 }
 
